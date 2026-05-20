@@ -4,8 +4,6 @@
 
 A command-line agent that investigates Elasticsearch cluster issues end-to-end — from natural-language problem description to structured diagnosis, evidence tables, and exported reports. The LLM plans a DAG of API calls, executes them iteratively against your cluster, and streams a root-cause analysis with actionable recommendations.
 
-> This is a public portfolio analog of a tool I built and deployed in a professional context. The architecture, agentic loop, and tool-registry pattern reflect the real implementation; data, credentials, and client-specific context have been replaced.
-
 ---
 
 ## How it works
@@ -232,6 +230,12 @@ Each run produces timestamped files in `./output/`:
 
 - `elastibot_<id>.html` — full dark-theme report with collapsible per-tool evidence tables, stat cards, the streamed analysis, and a risk assessment section
 - `<tool>_<ts>.csv` — one CSV per tool that returned an array (e.g. `cat_indices`, `cat_allocation`, `cat_shards`)
+
+---
+
+## Origin
+
+This is a public portfolio analog of a tool I built and deployed in a professional context. The architecture, agentic loop, and tool-registry pattern reflect the real implementation; data, credentials, and client-specific context have been replaced.
 
 ---
 
