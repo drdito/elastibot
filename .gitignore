@@ -15,3 +15,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Internal work orders / briefs
+*work-order*.md
+MORON.md
