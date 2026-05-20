@@ -4,6 +4,8 @@
 
 A command-line agent that investigates Elasticsearch cluster issues end-to-end — from natural-language problem description to structured diagnosis, evidence tables, and exported reports. The LLM plans a DAG of API calls, executes them iteratively against your cluster, and streams a root-cause analysis with actionable recommendations.
 
+> Want to see it run without setting anything up? Try the live demo at **[danieldito.com](https://danieldito.com)** or run `node index.js --demo` after cloning.
+
 ---
 
 ## How it works
@@ -128,7 +130,15 @@ Set `DEBUG=true` to print full stack traces on errors (useful during setup).
 
 ## Usage
 
-### Interactive investigation
+### Try it without credentials (demo mode)
+
+```bash
+node index.js --demo
+```
+
+Runs through all four phases with heuristic responses and a simulated typewriter stream. Produces a real HTML report and CSVs in `./output`. No Elasticsearch cluster or LLM endpoint needed.
+
+### Run against your cluster
 
 ```bash
 npm start
@@ -142,14 +152,6 @@ Describe your issue at the prompt. The agent plans, investigates, and streams a 
 - *"Indexing throughput dropped 60% in the last hour on the metrics-* indices"*
 - *"Several ILM policies appear stuck — indices are not rolling over"*
 - *"Cluster went yellow overnight, heap usage is elevated on all nodes"*
-
-### Demo mode (no credentials needed)
-
-```bash
-node index.js --demo
-```
-
-Runs through all four phases with heuristic responses and a simulated typewriter stream. Produces a real HTML report and CSVs in `./output`. Good for evaluating the UI before connecting a real cluster.
 
 ### Additional modes
 
