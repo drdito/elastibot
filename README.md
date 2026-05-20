@@ -36,7 +36,7 @@ The agent loop runs until the LLM stops emitting tool calls, at which point the 
 
 - **Model-agnostic** — works with any `/chat/completions`-compatible endpoint (OpenAI, Azure OpenAI, Ollama, vLLM, Anthropic-compatible proxies)
 - **Unified ES/Kibana auth** — one API key in `.env` covers both services
-- **Streaming output** — analysis types out live as the LLM generates it, Claude Code style
+- **Streaming output** — tokens stream live as the model generates them, with per-tool result banners interleaved
 - **DAG planner** — a dedicated planning call produces a structured investigation plan with conditional branches before any tools are invoked
 - **MCP-style tool registry** — 12 parameterized Elasticsearch API tools registered in a clean `{ name, description, parameters, execute }` contract
 - **Agentic loop** — the executor runs tool calls, feeds results back into the message thread, and continues until the LLM is satisfied
@@ -218,7 +218,9 @@ The tool is immediately available to the LLM on the next run.
 
 **Native HTTP only** — `src/llm.js` and `src/elastic.js` use Node's built-in `https`/`http` modules. SSE streaming from the LLM is parsed manually: newline-delimited `data:` frames are accumulated in a buffer, tool call arguments are concatenated across chunks by index, and `onToken`/`onToolStart` callbacks fire as content arrives.
 
-**Planning vs. execution** — The planner makes a single non-streaming call and parses the response as JSON, giving a structured DAG before any tools run. The executor then runs an open-ended agentic loop using streaming calls, letting the LLM decide how many tool rounds are needed based on what it finds.
+**Planning vs. execution** — The planner makes a single non-streaming call and parses the response as JSON, giving a structured DAG before any tools run. The executor then runs an open-ended agentic loop using streaming calls, letting the LLM decide how many tool rounds are needed based on what it finds. A hard `MAX_ITERATIONS` cap (default 20) prevents runaway loops — when hit, the executor requests a summary of evidence gathered so far.
+
+
 
 **Tool call accumulation** — OpenAI-style streaming splits tool call names and JSON arguments across many SSE chunks. The client accumulates `{ id, name, arguments }` by delta index and fires `onToolStart` exactly once per tool, when the name first becomes non-empty.
 
