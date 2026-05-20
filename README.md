@@ -1,5 +1,7 @@
 # ⚡ Elastibot
 
+[![Tests](https://github.com/drdito/elastibot/actions/workflows/test.yml/badge.svg)](https://github.com/drdito/elastibot/actions/workflows/test.yml)
+
 **Autonomous Elasticsearch Administration Harness**
 
 A command-line agent that investigates Elasticsearch cluster issues end-to-end — from natural-language problem description to structured diagnosis, evidence tables, and exported reports. The LLM plans a DAG of API calls, executes them iteratively against your cluster, and streams a root-cause analysis with actionable recommendations.
