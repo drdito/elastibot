@@ -213,7 +213,7 @@ async function interactive(llm, es) {
   }
 
   // ── Phase 3: Tool Execution ──────────────────────────────────────────────
-  phase(3, 'Tool Execution  (Pseudo-MCP)');
+  phase(3, 'Tool Execution  (MCP-style)');
   console.log(`  ${col(C.dim, 'Model:')} ${col(C.bold, process.env.LLM_MODEL)}  ${col(C.dim, '·  streaming live')}\n`);
 
   // We track whether we're mid-content-stream so we can add newlines before tool banners.
@@ -365,7 +365,7 @@ async function demoMode() {
   if (!confirm) { print.info('Demo cancelled.'); console.log(); return; }
 
   // Phase 3 ─────────────────────────────────────────────────────────────────
-  phase(3, 'Tool Execution  (Pseudo-MCP)  ' + col(C.yellow + C.bold, '[DEMO]'));
+  phase(3, 'Tool Execution  (MCP-style)  ' + col(C.yellow + C.bold, '[DEMO]'));
   console.log(`  ${col(C.dim, 'Model:')} ${col(C.bold, 'demo-heuristic')}  ${col(C.dim, '·  simulated streaming')}\n`);
 
   let streamingContent = false;

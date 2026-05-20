@@ -38,7 +38,7 @@ The agent loop runs until the LLM stops emitting tool calls, at which point the 
 - **Unified ES/Kibana auth** — one API key in `.env` covers both services
 - **Streaming output** — analysis types out live as the LLM generates it, Claude Code style
 - **DAG planner** — a dedicated planning call produces a structured investigation plan with conditional branches before any tools are invoked
-- **Pseudo-MCP tool server** — 12 parameterized Elasticsearch API tools registered in a clean `{ name, description, parameters, execute }` contract
+- **MCP-style tool registry** — 12 parameterized Elasticsearch API tools registered in a clean `{ name, description, parameters, execute }` contract
 - **Agentic loop** — the executor runs tool calls, feeds results back into the message thread, and continues until the LLM is satisfied
 - **Evidence exports** — HTML report (dark-theme, collapsible per-tool tables) and CSV files for every array result
 - **Nearly dependency-free** — only `dotenv` and `inquirer`; all HTTP (including SSE streaming) handled with Node's native `https` module
