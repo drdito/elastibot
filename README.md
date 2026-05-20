@@ -30,6 +30,10 @@ A command-line agent that investigates Elasticsearch cluster issues end-to-end â
 
 The agent loop runs until the LLM stops emitting tool calls, at which point the accumulated evidence becomes the basis for the final report.
 
+![Elastibot HTML report showing dark theme, stat cards, issue summary, and streamed analysis with evidence bullets](docs/screenshots/report.png)
+
+*Generated HTML report from `--demo` mode.*
+
 ---
 
 ## Features
