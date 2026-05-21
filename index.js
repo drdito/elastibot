@@ -10,10 +10,10 @@ const { banner, hr, phase, label, print, Spinner, col, C } = require('./src/cli'
 const { LLMClient }    = require('./src/llm');
 const { ElasticClient }= require('./src/elastic');
 const { Session }      = require('./src/session');
-const { runDemo, DEMO_PLAN, DEMO_ISSUE } = require('./src/demo');
-const { plan }         = require('./src/planner');
+const { runDemo, DEMO_ISSUE } = require('./src/demo');
 const { execute }      = require('./src/executor');
 const { toolDefs, dispatch, ALL_TOOLS } = require('./src/tools/registry');
+const { parseThinkingLevel } = require('./src/args');
 const { generate: genHTML }  = require('./src/export/html');
 const { exportEvidence }     = require('./src/export/csv');
 
@@ -142,61 +142,50 @@ function listTools() {
 
 // ── Interactive investigation mode ─────────────────────────────────────────
 
-async function interactive(llm, es) {
+async function interactive(llm, es, defaultThinkingLevel) {
 
   // ── Phase 1: Issue Intake ────────────────────────────────────────────────
   phase(1, 'Issue Intake');
 
-  const { issue } = await inquirer.prompt([{
-    type:     'input',
-    name:     'issue',
-    message:  col(C.brightCyan, '>'),
-    prefix:   '',
-    validate: v => v.trim().length > 4 || 'Please describe the issue in more detail.',
-  }]);
+  let thinkingLevel = defaultThinkingLevel;
+  let trimmed;
 
-  const trimmed = issue.trim();
-  console.log();
+  // Loop to handle /thinking_level slash command before issue is collected.
+  while (true) {
+    const { issue } = await inquirer.prompt([{
+      type:     'input',
+      name:     'issue',
+      message:  col(C.brightCyan, '>'),
+      prefix:   '',
+      validate: v => {
+        const t = v.trim();
+        if (t.startsWith('/')) return true;  // slash commands bypass length check
+        return t.length > 4 || 'Please describe the issue in more detail.';
+      },
+    }]);
 
-  // Ensure output directory exists.
-  const outputDir = path.resolve(process.env.OUTPUT_DIR || './output');
-  fs.mkdirSync(outputDir, { recursive: true });
+    const t = issue.trim();
 
-  const session = new Session({ issue: trimmed, model: process.env.LLM_MODEL });
-
-  // ── Phase 2: DAG Planning ────────────────────────────────────────────────
-  phase(2, 'DAG Planning');
-
-  const planSpinner = new Spinner('Generating investigation plan…').start();
-  let dagPlan;
-  try {
-    dagPlan = await plan(trimmed, llm);
-    planSpinner.stop('Investigation plan ready');
-  } catch (err) {
-    planSpinner.fail(`Planning failed: ${err.message}`);
-    process.exit(1);
-  }
-
-  // Render the plan.
-  console.log();
-  const priorityColor = { high: C.red, medium: C.yellow, low: C.green }[dagPlan.priority] || C.gray;
-  console.log(`  ${col(C.bold, 'Issue     ')}  ${dagPlan.summary}`);
-  console.log(`  ${col(C.bold, 'Hypothesis')}  ${dagPlan.hypothesis}`);
-  console.log(`  ${col(C.bold, 'Priority  ')}  ${col(priorityColor + C.bold, (dagPlan.priority || 'medium').toUpperCase())}`);
-  console.log();
-
-  if (Array.isArray(dagPlan.investigation_steps) && dagPlan.investigation_steps.length) {
-    console.log(`  ${col(C.bold + C.underline, 'Planned Investigation')}\n`);
-    for (const step of dagPlan.investigation_steps) {
-      const toolStr = step.tool ? `  ${col(C.magenta, '[' + step.tool + ']')}` : '';
-      console.log(`  ${col(C.gray, String(step.step) + '.')}  ${step.description}${toolStr}`);
-      if (step.conditions) {
-        if (step.conditions.if_positive) console.log(`       ${col(C.gray, '├ if concerning:')} ${step.conditions.if_positive}`);
-        if (step.conditions.if_negative) console.log(`       ${col(C.gray, '└ if normal:    ')} ${step.conditions.if_negative}`);
+    const thinkingMatch = t.match(/^\/thinking[_-]level\s+(\d+)$/i);
+    if (thinkingMatch) {
+      const n = parseInt(thinkingMatch[1], 10);
+      if (n > 0) {
+        thinkingLevel = n;
+        print.info(`Thinking level set to ${n} (max ${n} iterations)`);
+        console.log();
+      } else {
+        print.warn('/thinking_level requires a positive integer');
       }
+      continue;
     }
-    console.log();
+
+    if (t.length > 4) {
+      trimmed = t;
+      break;
+    }
   }
+
+  console.log();
 
   const { confirm } = await inquirer.prompt([{
     type:    'confirm',
@@ -212,11 +201,16 @@ async function interactive(llm, es) {
     return;
   }
 
-  // ── Phase 3: Tool Execution ──────────────────────────────────────────────
-  phase(3, 'Tool Execution  (MCP-style)');
+  // Ensure output directory exists.
+  const outputDir = path.resolve(process.env.OUTPUT_DIR || './output');
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const session = new Session({ issue: trimmed, model: process.env.LLM_MODEL, maxIterations: thinkingLevel });
+
+  // ── Phase 2: Investigation ───────────────────────────────────────────────
+  phase(2, `Investigation  ·  up to ${session.maxIterations} iterations`);
   console.log(`  ${col(C.dim, 'Model:')} ${col(C.bold, process.env.LLM_MODEL)}  ${col(C.dim, '·  streaming live')}\n`);
 
-  // We track whether we're mid-content-stream so we can add newlines before tool banners.
   let streamingContent = false;
 
   const analysis = await execute(
@@ -230,22 +224,20 @@ async function interactive(llm, es) {
           process.stdout.write('  ');
           streamingContent = true;
         }
-        // Re-indent lines within streamed content.
         const parts = token.split('\n');
         for (let i = 0; i < parts.length; i++) {
           process.stdout.write(parts[i]);
-          if (i < parts.length - 1) {
-            process.stdout.write('\n  ');
-          }
+          if (i < parts.length - 1) process.stdout.write('\n  ');
         }
       },
 
-      onToolStart(name) {
-        if (streamingContent) {
-          process.stdout.write('\n');
-          streamingContent = false;
-        }
-        // Tool banners are printed in onToolCall (we have params there).
+      onToolStart(_name) {
+        if (streamingContent) { process.stdout.write('\n'); streamingContent = false; }
+      },
+
+      onStep(node, step) {
+        if (streamingContent) { process.stdout.write('\n'); streamingContent = false; }
+        print.step(step, node.tool, node.rationale);
       },
 
       onToolCall(name, params) {
@@ -260,31 +252,40 @@ async function interactive(llm, es) {
         print.toolError(name, err);
       },
 
-      onIteration(n) {
-        if (n > 1 && streamingContent) {
-          process.stdout.write('\n');
-          streamingContent = false;
+      onConclude(report) {
+        if (streamingContent) { process.stdout.write('\n'); streamingContent = false; }
+        print.conclude();
+        console.log();
+        // Print the report inline since it arrived via tool args, not streamed.
+        process.stdout.write('  ');
+        const lines = report.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          process.stdout.write(lines[i]);
+          if (i < lines.length - 1) process.stdout.write('\n  ');
         }
+        process.stdout.write('\n');
+        streamingContent = false;
+      },
+
+      onIteration(n) {
+        if (n > 1 && streamingContent) { process.stdout.write('\n'); streamingContent = false; }
       },
 
       onMaxIter() {
         console.log();
-        print.warn(`Reached max iterations (${process.env.MAX_ITERATIONS || 20}). Requesting summary…`);
+        print.warn(`Reached max iterations (${session.maxIterations}). Requesting summary…`);
       },
 
       onDone() {
-        if (streamingContent) {
-          process.stdout.write('\n');
-          streamingContent = false;
-        }
+        if (streamingContent) { process.stdout.write('\n'); streamingContent = false; }
       },
     }
   );
 
   console.log();
 
-  // ── Phase 4: Evidence & Exports ──────────────────────────────────────────
-  phase(4, 'Evidence & Exports');
+  // ── Phase 3: Evidence & Exports ──────────────────────────────────────────
+  phase(3, 'Evidence & Exports');
 
   const htmlPath = genHTML(session, analysis, outputDir);
   session.addExport('html', htmlPath);
@@ -307,51 +308,47 @@ async function interactive(llm, es) {
 }
 
 // ── Demo mode ───────────────────────────────────────────────────────────────
-// Full UI walkthrough using heuristic responses — no real ES or LLM needed.
 
-async function demoMode() {
+async function demoMode(defaultThinkingLevel) {
   // Phase 1 ─────────────────────────────────────────────────────────────────
   phase(1, 'Issue Intake  ' + col(C.yellow + C.bold, '[DEMO]'));
 
-  const { issue } = await inquirer.prompt([{
-    type:    'input',
-    name:    'issue',
-    message: col(C.brightCyan, '>'),
-    prefix:  '',
-    default: DEMO_ISSUE,
-  }]);
+  let thinkingLevel = defaultThinkingLevel;
+  let trimmed;
 
-  const trimmed = issue.trim() || DEMO_ISSUE;
-  console.log();
+  while (true) {
+    const { issue } = await inquirer.prompt([{
+      type:    'input',
+      name:    'issue',
+      message: col(C.brightCyan, '>'),
+      prefix:  '',
+      default: DEMO_ISSUE,
+      validate: v => {
+        const t = v.trim();
+        if (t.startsWith('/')) return true;
+        return t.length > 4 || 'Please describe the issue in more detail.';
+      },
+    }]);
 
-  const outputDir = path.resolve(process.env.OUTPUT_DIR || './output');
-  fs.mkdirSync(outputDir, { recursive: true });
+    const t = issue.trim() || DEMO_ISSUE;
 
-  const session = new Session({ issue: trimmed, model: 'demo-heuristic' });
-
-  // Phase 2 ─────────────────────────────────────────────────────────────────
-  phase(2, 'DAG Planning  ' + col(C.yellow + C.bold, '[DEMO]'));
-
-  const planSpinner = new Spinner('Generating investigation plan…').start();
-  await new Promise(r => setTimeout(r, 1400));
-  planSpinner.stop('Investigation plan ready');
-
-  const dagPlan = DEMO_PLAN;
-  console.log();
-  console.log(`  ${col(C.bold, 'Issue     ')}  ${dagPlan.summary}`);
-  console.log(`  ${col(C.bold, 'Hypothesis')}  ${dagPlan.hypothesis}`);
-  console.log(`  ${col(C.bold, 'Priority  ')}  ${col(C.red + C.bold, dagPlan.priority.toUpperCase())}`);
-  console.log();
-  console.log(`  ${col(C.bold + C.underline, 'Planned Investigation')}\n`);
-
-  for (const step of dagPlan.investigation_steps) {
-    const toolStr = step.tool ? `  ${col(C.magenta, '[' + step.tool + ']')}` : '';
-    console.log(`  ${col(C.gray, String(step.step) + '.')}  ${step.description}${toolStr}`);
-    if (step.conditions) {
-      if (step.conditions.if_positive) console.log(`       ${col(C.gray, '├ if concerning:')} ${step.conditions.if_positive}`);
-      if (step.conditions.if_negative) console.log(`       ${col(C.gray, '└ if normal:    ')} ${step.conditions.if_negative}`);
+    const thinkingMatch = t.match(/^\/thinking[_-]level\s+(\d+)$/i);
+    if (thinkingMatch) {
+      const n = parseInt(thinkingMatch[1], 10);
+      if (n > 0) {
+        thinkingLevel = n;
+        print.info(`Thinking level set to ${n} (max ${n} iterations)`);
+        console.log();
+      } else {
+        print.warn('/thinking_level requires a positive integer');
+      }
+      continue;
     }
+
+    trimmed = t;
+    break;
   }
+
   console.log();
 
   const { confirm } = await inquirer.prompt([{
@@ -364,18 +361,20 @@ async function demoMode() {
 
   if (!confirm) { print.info('Demo cancelled.'); console.log(); return; }
 
-  // Phase 3 ─────────────────────────────────────────────────────────────────
-  phase(3, 'Tool Execution  (MCP-style)  ' + col(C.yellow + C.bold, '[DEMO]'));
+  const outputDir = path.resolve(process.env.OUTPUT_DIR || './output');
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const session = new Session({ issue: trimmed, model: 'demo-heuristic', maxIterations: thinkingLevel });
+
+  // Phase 2 ─────────────────────────────────────────────────────────────────
+  phase(2, `Investigation  ·  up to ${session.maxIterations} iterations  ` + col(C.yellow + C.bold, '[DEMO]'));
   console.log(`  ${col(C.dim, 'Model:')} ${col(C.bold, 'demo-heuristic')}  ${col(C.dim, '·  simulated streaming')}\n`);
 
   let streamingContent = false;
 
   const analysis = await runDemo(session, {
     onToken(token) {
-      if (!streamingContent) {
-        process.stdout.write('  ');
-        streamingContent = true;
-      }
+      if (!streamingContent) { process.stdout.write('  '); streamingContent = true; }
       const parts = token.split('\n');
       for (let i = 0; i < parts.length; i++) {
         process.stdout.write(parts[i]);
@@ -387,12 +386,31 @@ async function demoMode() {
       if (streamingContent) { process.stdout.write('\n'); streamingContent = false; }
     },
 
+    onStep(node, step) {
+      if (streamingContent) { process.stdout.write('\n'); streamingContent = false; }
+      print.step(step, node.tool, node.rationale);
+    },
+
     onToolCall(name, params) {
       print.tool(name, params);
     },
 
     onToolResult(name, result) {
       print.toolResult(name, result);
+    },
+
+    onConclude(report) {
+      if (streamingContent) { process.stdout.write('\n'); streamingContent = false; }
+      print.conclude();
+      console.log();
+      process.stdout.write('  ');
+      const lines = report.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        process.stdout.write(lines[i]);
+        if (i < lines.length - 1) process.stdout.write('\n  ');
+      }
+      process.stdout.write('\n');
+      streamingContent = false;
     },
 
     onDone() {
@@ -402,8 +420,8 @@ async function demoMode() {
 
   console.log();
 
-  // Phase 4 ─────────────────────────────────────────────────────────────────
-  phase(4, 'Evidence & Exports  ' + col(C.yellow + C.bold, '[DEMO]'));
+  // Phase 3 ─────────────────────────────────────────────────────────────────
+  phase(3, 'Evidence & Exports  ' + col(C.yellow + C.bold, '[DEMO]'));
 
   const htmlPath = genHTML(session, analysis, outputDir);
   session.addExport('html', htmlPath);
@@ -432,9 +450,10 @@ async function main() {
   banner();
 
   const args = process.argv.slice(2);
+  const thinkingLevel = parseThinkingLevel(args);
 
   // Demo mode needs no credentials — bail before env validation.
-  if (args.includes('--demo'))     return demoMode();
+  if (args.includes('--demo'))     return demoMode(thinkingLevel);
 
   validateEnv();
 
@@ -443,7 +462,7 @@ async function main() {
   if (args.includes('--rollcall')) return rollCall(es);
   if (args.includes('--tools'))    return listTools();
 
-  await interactive(llm, es);
+  await interactive(llm, es, thinkingLevel);
 }
 
 // Inquirer v8 emits this on SIGINT / piped-stdin close — not a real crash.

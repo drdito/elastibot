@@ -83,51 +83,35 @@ const DEMO_ISSUE =
   'Disk usage is high on node1 and node2. Several indices are showing yellow health status ' +
   'and we have multiple unassigned shards. Need to understand root cause and immediate remediation steps.';
 
+// Hypothesis-only plan — no upfront step list.
 const DEMO_PLAN = {
   summary:    'High disk utilization on data-node-1 (91%) and data-node-2 (88%) is triggering the Elasticsearch high-watermark shard allocation block.',
   hypothesis: 'Two of three data nodes have breached the 90% high-watermark threshold, causing replica shard allocation to fail and turning the cluster yellow.',
   priority:   'high',
-  investigation_steps: [
-    {
-      step: 1, tool: 'cluster_health',
-      description: 'Assess overall cluster status and count unassigned shards',
-      rationale:   'Establishes baseline — yellow status with unassigned shards is the entry signature for watermark issues.',
-      conditions:  { if_positive: 'Drill into node disk usage with cat_allocation', if_negative: 'Broaden investigation scope' },
-    },
-    {
-      step: 2, tool: 'cat_allocation',
-      description: 'Inspect per-node disk utilization and shard distribution',
-      rationale:   'Will show which specific nodes have crossed watermark thresholds.',
-      conditions:  { if_positive: 'Identify affected indices on saturated nodes', if_negative: 'Investigate other allocation causes' },
-    },
-    {
-      step: 3, tool: 'cat_indices',
-      description: 'Survey all indices — flag yellow ones and their disk footprint',
-      rationale:   'Pinpoints which indices have unassigned replicas and reveals outsized index growth.',
-      conditions:  { if_positive: 'Check shard state detail for yellow indices', if_negative: 'Review ILM rollover policy' },
-    },
-    {
-      step: 4, tool: 'cat_shards',
-      description: 'Confirm unassigned shard reasons for affected indices',
-      rationale:   'The unassigned_details field will confirm HIGH_DISK_WATERMARK as the allocation blocker.',
-      conditions:  { if_positive: 'Review ILM policy — rollover size may be too large', if_negative: 'Check replica count settings' },
-    },
-    {
-      step: 5, tool: 'ilm_summary',
-      description: 'Review ILM rollover policy thresholds',
-      rationale:   'A max_size rollover that is too large lets indices grow past the watermark before rotating.',
-      conditions:  { if_positive: 'Recommend tighter rollover + disk expansion', if_negative: 'Recommend manual forcemerge/shrink' },
-    },
-  ],
 };
 
-// Tool calls that play out during demo execution, in order.
+// Reasoning text the model streams before choosing each tool (simulates thinking aloud).
+const DEMO_REASONING = {
+  cluster_health:
+    'The cluster is reporting yellow health and unassigned shards. ' +
+    'Let me start with a baseline health check to establish how many shards are affected.',
+  cat_allocation:
+    '12 unassigned shards — and they are all replicas. ' +
+    'Disk pressure is the most likely cause. I will check per-node allocation to find which nodes have crossed the high-watermark.',
+  cat_indices:
+    'data-node-1 is at 91%, data-node-2 at 88%. ' +
+    'The default high-watermark is 90%, so node-1 has already breached it. ' +
+    'I need to see which specific indices have unassigned replicas to scope the impact.',
+  conclude:
+    'Three yellow indices with replica failures caused by HIGH_DISK_WATERMARK on nodes 1 and 2. ' +
+    'Primary shards are intact. I have enough evidence — writing the final report now.',
+};
+
+// Demo executes 3 tool calls then concludes early (demonstrates early-exit path).
 const DEMO_SEQUENCE = [
   { name: 'cluster_health', params: { level: 'cluster' },           key: 'cluster_health' },
   { name: 'cat_allocation', params: {},                              key: 'cat_allocation'  },
   { name: 'cat_indices',    params: { sort_by: 'store.size:desc' }, key: 'cat_indices'     },
-  { name: 'cat_shards',     params: { state: 'UNASSIGNED' },        key: 'cat_shards'      },
-  { name: 'ilm_summary',    params: {},                              key: 'ilm_summary'     },
 ];
 
 const DEMO_ANALYSIS = `## Summary
@@ -140,20 +124,14 @@ The cluster is in yellow state due to replica shard allocation failures caused b
 - data-node-3: 455 GB / 1 TB — **45% disk** (healthy, absorbing primaries)
 - 3 yellow indices: logs-app-2024.05.17 (182 GB), logs-app-2024.05.16 (194 GB), metrics-2024.05.17 (88 GB)
 - All unassigned shard reasons: HIGH_DISK_WATERMARK via NODE_LEFT / ALLOCATION_FAILED
-- ILM logs-policy rollover: max_size=50 GB — but indices are reaching 91–97 GB per primary before rolling, indicating the write alias is not triggering rollover correctly
 
 ## Root Cause
-The high disk watermark (90% by default at cluster.routing.allocation.disk.watermark.high) has been breached on data-node-1 and is imminent on data-node-2. Elasticsearch refuses to allocate new shards — including replicas — to any node above this threshold. The contributing factor is that the ILM rollover condition (max_size: 50 GB) is not being enforced, allowing individual index segments to grow nearly twice as large as intended before a new index is created. This compounded normal data growth to push both nodes over threshold simultaneously.
+The high disk watermark (90%) has been breached on data-node-1 and is imminent on data-node-2. Elasticsearch refuses to allocate new shards — including replicas — to any node above this threshold.
 
 ## Recommendations
-1. **Immediate** — Free disk space on nodes 1 and 2. Snapshot then delete indices outside your retention window. As a stopgap, temporarily set replicas to 0 on the two largest yellow indices to allow Elasticsearch to reclaim replica shard space and recover cluster status to green:
-   PUT /logs-app-2024.05.16/_settings  { "index": { "number_of_replicas": 0 } }
-   PUT /logs-app-2024.05.17/_settings  { "index": { "number_of_replicas": 0 } }
-   Restore to 1 after disk usage drops below 80%.
-
-2. **Short-term** — Fix the ILM write alias for logs-app-* to ensure rollover triggers at the configured max_size. Reduce rollover threshold to max_size: 30 GB and add a max_age: 12h safety condition. Verify with: GET /logs-app-*/_ilm/explain
-
-3. **Long-term** — Add alerting at 75% disk usage (before the 85% low-watermark pauses allocation entirely). Expand storage on nodes 1 and 2, or onboard a warm/frozen tier with cheaper object-store-backed searchable snapshots for indices older than 7 days. Target steady-state disk utilization below 70% on all data nodes to absorb ingestion spikes safely.
+1. **Immediate** — Free disk space on nodes 1 and 2. Snapshot then delete indices outside your retention window. Temporarily set replicas to 0 on the two largest yellow indices to recover cluster status to green.
+2. **Short-term** — Fix the ILM write alias for logs-app-* to ensure rollover triggers at the configured max_size. Reduce threshold to max_size: 30 GB and add a max_age: 12h safety condition.
+3. **Long-term** — Add alerting at 75% disk usage. Expand storage on nodes 1 and 2, or onboard a warm tier with searchable snapshots for indices older than 7 days.
 
 ## Risk Assessment
 **HIGH** — data-node-1 is already above the flood-stage watermark (95%) threshold. If ingestion continues unchecked, Elasticsearch will set all index blocks to read-only within hours, halting all writes across every data pipeline feeding this cluster.`;
@@ -161,12 +139,24 @@ The high disk watermark (90% by default at cluster.routing.allocation.disk.water
 // ── Demo runner ──────────────────────────────────────────────────────────────
 
 async function runDemo(session, callbacks) {
-  for (const call of DEMO_SEQUENCE) {
-    // Brief pause between tool calls to feel like real API latency.
-    await sleep(500);
+  for (let i = 0; i < DEMO_SEQUENCE.length; i++) {
+    const call = DEMO_SEQUENCE[i];
 
+    // Stream model reasoning — shows "model reasons" before each tool choice.
+    await sleep(400);
+    const reasoning = DEMO_REASONING[call.name] || '';
+    if (reasoning && callbacks.onToken) {
+      await typeText(reasoning, callbacks.onToken);
+    }
+    await sleep(300);
+
+    // Signal a tool is about to start (lets the UI close any open content line).
     callbacks.onToolStart?.(call.name);
-    await sleep(150);
+
+    // Show the investigation step being added to the DAG.
+    const dagNode = { step: i + 1, tool: call.name, rationale: reasoning };
+    callbacks.onStep?.(dagNode, i + 1);
+
     callbacks.onToolCall?.(call.name, call.params);
 
     // Simulate ES API response time.
@@ -175,15 +165,20 @@ async function runDemo(session, callbacks) {
     const result = MOCK[call.key];
     callbacks.onToolResult?.(call.name, result);
     session.addEvidence({ tool: call.name, params: call.params, result });
+    session.addDagNode({ ...dagNode, result });
 
-    await sleep(250);
+    await sleep(350);
   }
 
-  // Pause before the analysis starts — mimics the LLM "thinking" before streaming.
-  await sleep(900);
+  // Stream conclude reasoning, then fire the early-exit conclude.
+  await sleep(400);
+  const concludeReasoning = DEMO_REASONING.conclude;
+  if (concludeReasoning && callbacks.onToken) {
+    await typeText(concludeReasoning, callbacks.onToken);
+  }
+  await sleep(600);
 
-  await typeText(DEMO_ANALYSIS, callbacks.onToken);
-
+  callbacks.onConclude?.(DEMO_ANALYSIS);
   callbacks.onDone?.(DEMO_ANALYSIS);
   return DEMO_ANALYSIS;
 }

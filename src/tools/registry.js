@@ -13,6 +13,27 @@ const nodeStats        = require('./node_stats');
 const snapshotStatus   = require('./snapshot_status');
 const pendingTasks     = require('./pending_tasks');
 
+// Meta-tool intercepted by the executor before ES dispatch.
+// The LLM calls this when it has enough evidence to write the final report.
+const conclude = {
+  name: 'conclude',
+  description: 'Call this when you have sufficient evidence to write your final report. Pass your complete markdown analysis as the `report` argument. This ends the investigation immediately.',
+  parameters: {
+    type: 'object',
+    properties: {
+      report: {
+        type: 'string',
+        description: 'Full markdown final report (## Summary, ## Evidence, ## Root Cause, ## Recommendations, ## Risk Assessment)',
+      },
+    },
+    required: ['report'],
+  },
+  // Never reaches dispatch — the executor intercepts conclude before calling dispatch().
+  async execute() {
+    throw new Error('conclude is handled by the executor and must not be dispatched');
+  },
+};
+
 const ALL_TOOLS = [
   clusterHealth,
   catIndices,
@@ -26,6 +47,7 @@ const ALL_TOOLS = [
   nodeStats,
   snapshotStatus,
   pendingTasks,
+  conclude,
 ];
 
 // OpenAI-compatible tool definitions passed to the LLM.

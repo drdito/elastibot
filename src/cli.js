@@ -71,6 +71,16 @@ const print = {
   toolError: (name, err) => {
     console.log(`  ${col(C.gray, '└')}  ${col(C.red, `error: ${err.message}`)}`);
   },
+
+  step: (n, tool, rationale) => {
+    const rat = rationale ? rationale.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+    const suffix = rat ? `  ${col(C.gray, rat)}` : '';
+    console.log(`\n  ${col(C.cyan, `◆ step ${n}`)}  ${col(C.bold, tool)}${suffix}`);
+  },
+
+  conclude: () => {
+    console.log(`\n  ${col(C.brightGreen + C.bold, '◉ conclude')}  ${col(C.gray, 'sufficient evidence gathered — writing final report')}`);
+  },
 };
 
 // Inline spinner — uses readline to overwrite the current line on TTY.
